@@ -19,11 +19,12 @@ def save_current_number(number):
     with open("numbering.txt", "w") as file:
         file.write(str(number))
 
+        
 def order_rect(points):
     # initialize result -> rectangle coordinates (4 corners, 2 coordinates (x,y))
     res = np.zeros((4, 2), dtype=np.float32)
 
-    left_to_right = points[points[:, 0].argsort()] # Sorted by x
+    left_to_right = points[points[:, 0].argsort()] # Sorted by x
 
     left_points = left_to_right[:2,:]
     left_points = left_points[left_points[:, 1].argsort()] # Sorted by y
@@ -38,11 +39,13 @@ def order_rect(points):
     return res
 
 def four_point_perspective_transform(img, points):
-    # Create an empty array for the destination points (rectangle corners)
-    rect = np.zeros((4, 2), dtype=np.float32)
-
     # Order the input points in clockwise order
     ordered_points = order_rect(points)
+
+    # Calculate the aspect ratio of the source rectangle
+    src_width = np.sqrt(((ordered_points[1][0] - ordered_points[0][0]) ** 2) + ((ordered_points[1][1] - ordered_points[0][1]) ** 2))
+    src_height = np.sqrt(((ordered_points[3][0] - ordered_points[0][0]) ** 2) + ((ordered_points[3][1] - ordered_points[0][1]) ** 2))
+    aspect_ratio_src = src_width / src_height
 
     # Calculate the width and height of the destination rectangle
     widthA = np.sqrt(((ordered_points[3][0] - ordered_points[2][0]) ** 2) + ((ordered_points[3][1] - ordered_points[2][1]) ** 2))
@@ -53,21 +56,44 @@ def four_point_perspective_transform(img, points):
     heightB = np.sqrt(((ordered_points[0][0] - ordered_points[2][0]) ** 2) + ((ordered_points[0][1] - ordered_points[2][1]) ** 2))
     maxHeight = max(int(heightA), int(heightB))
 
+    # Calculate the new dimensions while preserving the aspect ratio
+    aspect_ratio_dest = maxWidth / maxHeight
+    if aspect_ratio_src > aspect_ratio_dest:
+        new_height = int(maxWidth / aspect_ratio_src)
+        new_width = maxWidth
+    else:
+        new_width = int(maxHeight * aspect_ratio_src)
+        new_height = maxHeight
+
     # Set the destination points (rectangle corners)
-    rect[0] = [0, 0]
-    rect[1] = [maxWidth - 1, 0]
-    rect[2] = [maxWidth - 1, maxHeight - 1]
-    rect[3] = [0, maxHeight - 1]
+    rect = np.array([[0, 0], [new_width - 1, 0], [new_width - 1, new_height - 1], [0, new_height - 1]], dtype=np.float32)
 
     # Compute the perspective transform matrix and apply it
     M = cv2.getPerspectiveTransform(ordered_points, rect)
-    warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+    warped = cv2.warpPerspective(img, M, (new_width, new_height))
 
     return warped
 
 
+def set_gamma(image, gamma):
+    # Ensure gamma is not less than 0.01 to avoid mathematical issues
+    gamma = max(gamma, 0.01)
+    
+    # Normalize the pixel values to the range [0, 1]
+    normalized_image = image / 255.0
+    
+    # Apply gamma correction
+    adjusted_image = np.power(normalized_image, 1.0 / gamma)
+    
+    # Scale the adjusted pixel values back to the original range [0, 255]
+    adjusted_image = (adjusted_image * 255.0).astype(np.uint8)
+    
+    return adjusted_image
+
+
+
 # Function to detect the squares in the image and crop them
-def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3):
+def detect_squares(image_path, output_path, threshold_factor, num_subsets=3):
     # Load the image
     image = cv2.imread(image_path)
 
@@ -77,11 +103,21 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
     # Downscale image
     down_image = cv2.resize(image, (0, 0), fx=0.1, fy=0.1)
 
+    gamma = 0.1
+
+    # Apply gamma adjustment to the image
+    down_image = set_gamma(down_image, gamma)
+
+
     # Convert image to grayscale
     gray = cv2.cvtColor(down_image, cv2.COLOR_BGR2GRAY)
 
-    # Use adaptive thresholding to create a binary image
+    # Blur the image to remove noise
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # # Use adaptive thresholding to create a binary image
     _, binary_image = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+
 
     # Find all contours in the binary image
     contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -95,6 +131,8 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
 
     # Get the current numbering value
     current_number = get_current_number()
+
+
 
     # Iterate over the contours and draw rectangles around them
     for i, c in enumerate(contours):
@@ -142,8 +180,17 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
         print(f"Closest Angle: {closest_angle}")
         print(f"Angle: {angle}")
 
+        #show the image
+        cv2.imshow("Image", down_image)
+
+
+        # scale up the box for the original image
+        box = box * 10
+
+
         # Apply the perspective transform to the rotated square
-        warped_square = four_point_perspective_transform(down_image, box)
+        warped_square = four_point_perspective_transform(image, box)
+
 
         # Save the image with the rotated rectangle
         cv2.imwrite(f"{output_path}/{current_number}-warped.png", warped_square)
@@ -202,6 +249,7 @@ title_label.pack(pady=20)
 label_file = tk.Label(root, text="Input File:")
 label_file.pack()
 entry_file = tk.Entry(root)
+entry_file.insert(0, "C:/Users/johnw/Documents/CS Projects/Edge Detector/Input/EPSON005.JPG")
 entry_file.pack(pady=5)
 button_browse = tk.Button(root, text="Browse", command=browse_file)
 button_browse.pack()
@@ -221,6 +269,7 @@ entry_num_subsets.insert(0, "3")
 label_output = tk.Label(root, text="Output File Path:")
 label_output.pack()
 entry_output = tk.Entry(root)
+entry_output.insert(0, "C:/Users/johnw/Documents/CS Projects/Edge Detector/Output")
 entry_output.pack(pady=5)
 
 browse_button = tk.Button(root, text="Browse", command=browse_output_folder)
