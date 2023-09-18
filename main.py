@@ -19,6 +19,53 @@ def save_current_number(number):
     with open("numbering.txt", "w") as file:
         file.write(str(number))
 
+def order_rect(points):
+    # initialize result -> rectangle coordinates (4 corners, 2 coordinates (x,y))
+    res = np.zeros((4, 2), dtype=np.float32)
+
+    left_to_right = points[points[:, 0].argsort()] # Sorted by x
+
+    left_points = left_to_right[:2,:]
+    left_points = left_points[left_points[:, 1].argsort()] # Sorted by y
+    right_points = left_to_right[2:,:]
+    right_points = right_points[right_points[:, 1].argsort()] # Sorted by y
+
+    res[0] = left_points[0]
+    res[1] = right_points[0]
+    res[2] = right_points[1]
+    res[3] = left_points[1]
+
+    return res
+
+def four_point_perspective_transform(img, points):
+    # Create an empty array for the destination points (rectangle corners)
+    rect = np.zeros((4, 2), dtype=np.float32)
+
+    # Order the input points in clockwise order
+    ordered_points = order_rect(points)
+
+    # Calculate the width and height of the destination rectangle
+    widthA = np.sqrt(((ordered_points[3][0] - ordered_points[2][0]) ** 2) + ((ordered_points[3][1] - ordered_points[2][1]) ** 2))
+    widthB = np.sqrt(((ordered_points[1][0] - ordered_points[0][0]) ** 2) + ((ordered_points[1][1] - ordered_points[0][1]) ** 2))
+    maxWidth = max(int(widthA), int(widthB))
+
+    heightA = np.sqrt(((ordered_points[1][0] - ordered_points[3][0]) ** 2) + ((ordered_points[1][1] - ordered_points[3][1]) ** 2))
+    heightB = np.sqrt(((ordered_points[0][0] - ordered_points[2][0]) ** 2) + ((ordered_points[0][1] - ordered_points[2][1]) ** 2))
+    maxHeight = max(int(heightA), int(heightB))
+
+    # Set the destination points (rectangle corners)
+    rect[0] = [0, 0]
+    rect[1] = [maxWidth - 1, 0]
+    rect[2] = [maxWidth - 1, maxHeight - 1]
+    rect[3] = [0, maxHeight - 1]
+
+    # Compute the perspective transform matrix and apply it
+    M = cv2.getPerspectiveTransform(ordered_points, rect)
+    warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
+
+    return warped
+
+
 # Function to detect the squares in the image and crop them
 def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3):
     # Load the image
@@ -78,7 +125,7 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
             slope = (y2 - y1) / (x2 - x1)
             angle = np.arctan(slope) * 180 / np.pi
 
-        # Rotate the image to the nearest 90 degrees
+          # Rotate the image to the nearest 90 degrees
         if angle < 0:
             angle = -angle
 
@@ -94,46 +141,17 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
         print(f"Corrective Angle: {corrective_angle}")
         print(f"Closest Angle: {closest_angle}")
         print(f"Angle: {angle}")
-        print("")
 
-        # Rotate the image counter-clockwise by the corrective angle
-        rows, cols = down_image.shape[:2]
-        M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
-        rotated_image = cv2.warpAffine(down_image, M, (cols, rows))
+        # Apply the perspective transform to the rotated square
+        warped_square = four_point_perspective_transform(down_image, box)
 
-        # Rotate the box points by the corrective angle
-        center = (cols / 2, rows / 2)
-        rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
-        rotated_box = cv2.transform(np.array([box]), rot_mat)[0]
+        # Save the image with the rotated rectangle
+        cv2.imwrite(f"{output_path}/{current_number}-warped.png", warped_square)
 
 
-        # crop the image to the rotated rectangle
-        # get the min and max points, then crop
-        x_min = np.min(rotated_box[:, 0])
-        x_max = np.max(rotated_box[:, 0])
-        y_min = np.min(rotated_box[:, 1])
-        y_max = np.max(rotated_box[:, 1])
+        print(f"Current Number: {current_number}")
 
-        # crop the image to the rotated rectangle
-        cropped_image = rotated_image[y_min:y_max, x_min:x_max]
-        
-        # Save the image
-        cv2.imwrite(f"{output_path}/{current_number}.png", cropped_image)
 
-        # Get the bounding rectangle of the rotated box
-        # x, y, w, h = cv2.boundingRect(rotated_box)
-
-        # Scale the points up to the original image size
-        # x = x * 10
-        # y = y * 10
-        # w = w * 10
-        # h = h * 10
-
-        # # Crop the image
-        # cropped_image = image_with_border[y:y + h, x:x + w]
-
-        # Save the image
-        # cv2.imwrite(f"{output_path}/{current_number}.png", cropped_image)
 
         # Increment the current number
         current_number += 1
