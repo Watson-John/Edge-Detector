@@ -24,8 +24,8 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
     # Load the image
     image = cv2.imread(image_path)
 
-    # add a white border around image
-    image = cv2.copyMakeBorder(image, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
+    # Add a white border around the image
+    image_with_border = cv2.copyMakeBorder(image, 10, 10, 10, 10, cv2.BORDER_CONSTANT, value=[255, 255, 255])
 
     # Downscale image
     down_image = cv2.resize(image, (0, 0), fx=0.1, fy=0.1)
@@ -34,16 +34,12 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
     gray = cv2.cvtColor(down_image, cv2.COLOR_BGR2GRAY)
 
     # Use adaptive thresholding to create a binary image
-    _, binary_image_otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-
-    # Adjust the threshold value by the specified factor
-    threshold_value = threshold_factor * cv2.threshold(gray, 0, 255, cv2.THRESH_OTSU)[0]
-    _, binary_image = cv2.threshold(gray, threshold_value, 255, cv2.THRESH_BINARY_INV)
+    _, binary_image = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
 
     # Find all contours in the binary image
     contours, _ = cv2.findContours(binary_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    #reject all contours that are too small
+    # Reject all contours that are too small
     contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 200]
 
     # Filter small contours and sort by area
@@ -53,43 +49,101 @@ def detect_squares(image_path, output_path, threshold_factor=1.0, num_subsets=3)
     # Get the current numbering value
     current_number = get_current_number()
 
-
-
     # Iterate over the contours and draw rectangles around them
     for i, c in enumerate(contours):
         # Approximate the contour
         peri = cv2.arcLength(c, True)
-        approx = cv2.approxPolyDP(c, peri * 0.09, True)
+        approx = cv2.approxPolyDP(c, peri * 0.02, True)  # Adjust the parameter as needed
 
-        #minimize the contour to a rectangle
+        # Get the rectangle coordinates from the approximated contour
         rect = cv2.minAreaRect(approx)
+        box = cv2.boxPoints(rect)
+        box = np.int0(box)
 
-        # Get the rectangle coordinates and dimensions
-        x, y, w, h = cv2.boundingRect(approx)
+        # Find the longest side of the box
+        side1 = np.linalg.norm(box[0] - box[1])
+        side2 = np.linalg.norm(box[0] - box[3])
+        side_long = max(side1, side2)
 
-        # Print the area of the contour
-        print(f"Area of subset photo {i+1}: {cv2.contourArea(c)}")
+        if side_long == side1:
+            # Calculate the slope of side 1
+            x1, y1 = box[0]
+            x2, y2 = box[1]
+            slope = (y2 - y1) / (x2 - x1)
+            angle = np.arctan(slope) * 180 / np.pi
+        else:
+            # Calculate the slope of side 2
+            x1, y1 = box[0]
+            x2, y2 = box[3]
+            slope = (y2 - y1) / (x2 - x1)
+            angle = np.arctan(slope) * 180 / np.pi
+
+        # Rotate the image to the nearest 90 degrees
+        if angle < 0:
+            angle = -angle
+
+        angle_list = [0, 90, 180, 270]
+
+        # Find the closest angle to the current angle
+        closest_angle = min(angle_list, key=lambda x: abs(x - angle))
+
+        # Calculate the corrective angle
+        corrective_angle = abs(closest_angle - angle)
+
+        # Print the corrective angle
+        print(f"Corrective Angle: {corrective_angle}")
+        print(f"Closest Angle: {closest_angle}")
+        print(f"Angle: {angle}")
+        print("")
+
+        # Rotate the image counter-clockwise by the corrective angle
+        rows, cols = down_image.shape[:2]
+        M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
+        rotated_image = cv2.warpAffine(down_image, M, (cols, rows))
+
+        # Rotate the box points by the corrective angle
+        center = (cols / 2, rows / 2)
+        rot_mat = cv2.getRotationMatrix2D(center, angle, 1.0)
+        rotated_box = cv2.transform(np.array([box]), rot_mat)[0]
+
+
+        # crop the image to the rotated rectangle
+        # get the min and max points, then crop
+        x_min = np.min(rotated_box[:, 0])
+        x_max = np.max(rotated_box[:, 0])
+        y_min = np.min(rotated_box[:, 1])
+        y_max = np.max(rotated_box[:, 1])
+
+        # crop the image to the rotated rectangle
+        cropped_image = rotated_image[y_min:y_max, x_min:x_max]
         
-        # Scale the rectangle coordinates back to the original image size and crop the image
-        x = int(x / 0.1) 
-        y = int(y / 0.1) 
-        w = int(w / 0.1) 
-        h = int(h / 0.1)
+        # Save the image
+        cv2.imwrite(f"{output_path}/{current_number}.png", cropped_image)
 
-        cropped_image = image[y:y + h, x:x + w]
+        # Get the bounding rectangle of the rotated box
+        # x, y, w, h = cv2.boundingRect(rotated_box)
 
+        # Scale the points up to the original image size
+        # x = x * 10
+        # y = y * 10
+        # w = w * 10
+        # h = h * 10
 
-        # Save the cropped image with the numbered filename
-        output_filename = f"{output_path}/cropped_image_{current_number}.png"
-        cv2.imwrite(output_filename, cropped_image)
+        # # Crop the image
+        # cropped_image = image_with_border[y:y + h, x:x + w]
 
-        # Increment the current numbering value
+        # Save the image
+        # cv2.imwrite(f"{output_path}/{current_number}.png", cropped_image)
+
+        # Increment the current number
         current_number += 1
 
     # Save the updated numbering value
-    save_current_number(current_number)        
+    save_current_number(current_number)
 
-        
+
+
+
 # Function to browse and select the input file
 def browse_file():
     file_path = filedialog.askopenfilename(filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.tif")])
